@@ -1,0 +1,189 @@
+DEF rLCDC EQU $FF40
+DEF rLY   EQU $FF44
+DEF rBGP  EQU $FF47
+
+DEF LCDCF_BGON EQU %00000001
+DEF LCDCF_ON   EQU %10000000
+
+SECTION "Header", ROM0[$100]
+    nop
+    jp Entry
+
+    ds $150 - @, 0
+
+SECTION "Main", ROM0
+
+Entry:
+    ; Wait until LCD is in VBlank before disabling it
+.waitVBlank
+    ld a, [rLY]
+    cp 144
+    jr c, .waitVBlank
+
+    ; Turn LCD off
+    xor a
+    ld [rLCDC], a
+
+    ; Load font tiles
+    ld hl, Font
+    ld de, $8000
+    ld bc, FontEnd - Font
+.copyTiles
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .copyTiles
+
+    ; Clear BG map
+    ld hl, $9800
+    ld bc, 32 * 32
+    xor a
+.clear
+    ld [hli], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, .clear
+
+    ; Write message
+    ld hl, $9800
+    ld de, Message
+.write
+    ld a, [de]
+    cp 0
+    jr z, .done
+    ld [hli], a
+    inc de
+    jr .write
+
+.done
+    ; Palette (white -> black)
+    ld a, %11100100
+    ld [rBGP], a
+
+    ; Enable LCD, BG on
+    ld a, LCDCF_ON | LCDCF_BGON
+    ld [rLCDC], a
+
+.forever
+    halt
+    jr .forever
+
+Message:
+    db 8,5,12,12,15,0,2,7,0
+    ; H E L L O _ B G B
+    ; Tile 0 = blank
+
+; ---------------------------------------------------------------------
+; Font
+; Tiles:
+; 0 = blank
+; 2 = B
+; 5 = E
+; 7 = G
+; 8 = H
+; 12 = L
+; 15 = O
+; ---------------------------------------------------------------------
+
+Font:
+
+; Tile 0 (blank)
+REPT 16
+    db 0
+ENDR
+
+; Tile 1 (unused)
+REPT 16
+    db 0
+ENDR
+
+; Tile 2 = B
+db %11111100,%11111100
+db %11000110,%11000110
+db %11000110,%11000110
+db %11111100,%11111100
+db %11000110,%11000110
+db %11000110,%11000110
+db %11111100,%11111100
+db 0,0
+
+; Tile 3
+REPT 16
+    db 0
+ENDR
+
+; Tile 4
+REPT 16
+    db 0
+ENDR
+
+; Tile 5 = E
+db %11111110,%11111110
+db %11000000,%11000000
+db %11111100,%11111100
+db %11000000,%11000000
+db %11000000,%11000000
+db %11111110,%11111110
+db 0,0
+db 0,0
+
+; Tile 6
+REPT 16
+    db 0
+ENDR
+
+; Tile 7 = G
+db %00111100,%00111100
+db %01100000,%01100000
+db %01101110,%01101110
+db %01100110,%01100110
+db %00111100,%00111100
+db 0,0
+db 0,0
+db 0,0
+
+; Tile 8 = H
+db %11000110,%11000110
+db %11000110,%11000110
+db %11111110,%11111110
+db %11000110,%11000110
+db %11000110,%11000110
+db %11000110,%11000110
+db 0,0
+db 0,0
+
+; Tiles 9-11
+REPT 16*3
+    db 0
+ENDR
+
+; Tile 12 = L
+db %11000000,%11000000
+db %11000000,%11000000
+db %11000000,%11000000
+db %11000000,%11000000
+db %11000000,%11000000
+db %11111110,%11111110
+db 0,0
+db 0,0
+
+; Tiles 13-14
+REPT 16*2
+    db 0
+ENDR
+
+; Tile 15 = O
+db %00111100,%00111100
+db %01100110,%01100110
+db %01100110,%01100110
+db %01100110,%01100110
+db %01100110,%01100110
+db %00111100,%00111100
+db 0,0
+db 0,0
+
+FontEnd:
