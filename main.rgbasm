@@ -1,96 +1,133 @@
-DEF rLCDC EQU $FF40
-DEF rLY   EQU $FF44
-DEF rBGP  EQU $FF47
+DEF rLCDC  EQU $FF40
+DEF rLY    EQU $FF44
+DEF rBGP   EQU $FF47
+DEF rSTAT  EQU $FF41
+DEF rIE    EQU $FFFF
+DEF rIF    EQU $FF0F
 
-DEF LCDCF_BGON EQU %00000001
-DEF LCDCF_ON   EQU %10000000
+DEF LCDCF_ON    EQU %10000000
+DEF LCDCF_BGON  EQU %00000001
+DEF LCDCF_OBJON EQU %00000010   ; enable sprites
+DEF LCDCF_OBJ16 EQU %00000100   ; 8×16 sprites (kept cleared – we use 8×8)
+
+DEF NR10 EQU $FF10   ; sweep (unused)
+DEF NR11 EQU $FF11   ; duty & length
+DEF NR12 EQU $FF12   ; envelope
+DEF NR13 EQU $FF13   ; frequency low
+DEF NR14 EQU $FF14   ; frequency high / trigger
+
+DEF MessageLength EQU 9        ; “HELLO BGB” (number of tiles)
+DEF SpriteTile    EQU 16       ; first free tile after the font (0‑15)
+DEF SpriteSize    EQU 8        ; 8 px (8×8 sprite)
 
 SECTION "Header", ROM0[$100]
     nop
-    jp Entry
-
-    ds $150 - @, 0
+    jp   Entry
+    REPT $150-@               ; pad to $150
+        db 0
+    ENDR
 
 SECTION "Main", ROM0
 
 Entry:
-    ; Wait until LCD is in VBlank before disabling it
-.waitVBlank
-    ld a, [rLY]
-    cp 144
-    jr c, .waitVBlank
+    call WaitVBlank
+    xor  a
+    ld   [rLCDC],a                ; LCD off while we initialise
 
-    ; Turn LCD off
-    xor a
-    ld [rLCDC], a
+    ld   hl,Font
+    ld   de,$8000                 ; BG tile area
+    ld   bc,FontEnd-Font
+    call CopyMemory
 
-    ; Load font tiles
-    ld hl, Font
-    ld de, $8000
-    ld bc, FontEnd - Font
-.copyTiles
-    ld a, [hli]
-    ld [de], a
-    inc de
-    dec bc
-    ld a, b
-    or c
-    jr nz, .copyTiles
+    ld   hl,SpriteTileData
+    ld   de,$8800                 ; sprite tile area (first free tile)
+    ld   bc,SpriteTileDataEnd-SpriteTileData
+    call CopyMemory
 
-    ; Clear BG map
-    ld hl, $9800
-    ld bc, 32 * 32
-    xor a
-.clear
-    ld [hli], a
-    dec bc
-    ld a, b
-    or c
-    jr nz, .clear
+    ; Y = 80+16 (center of screen), X will be updated each frame
+    ld   a,80+16
+    ld   [$FE00],a                ; OAM Y
+    ld   a,0
+    ld   [$FE01],a                ; OAM X (start at 0)
+    ld   a,SpriteTile
+    ld   [$FE02],a                ; tile index
+    ld   a,%00000000              ; palette 0, no flip, priority 0
+    ld   [$FE03],a                ; attributes
 
-    ; Write message
-    ld hl, $9800
-    ld de, Message
-.write
-    ld a, [de]
-    cp 0
-    jr z, .done
-    ld [hli], a
-    inc de
-    jr .write
+    xor  a
+    ld   [NR10],a
+    ld   [NR11],a
+    ld   [NR12],a
+    ld   [NR13],a
+    ld   [NR14],a
 
-.done
-    ; Palette (white -> black)
-    ld a, %11100100
-    ld [rBGP], a
+    ld   a,1<<0                   ; enable V‑Blank interrupt
+    ld   [rIE],a
+    ei                            ; global interrupt enable
 
-    ; Enable LCD, BG on
-    ld a, LCDCF_ON | LCDCF_BGON
-    ld [rLCDC], a
+    ld   a,LCDCF_ON|LCDCF_BGON|LCDCF_OBJON
+    ld   [rLCDC],a
 
-.forever
+Forever:
     halt
-    jr .forever
+    jr   Forever
+
+VBlankISR:
+    ld   a,[SpriteX]          ; current X
+    inc  a
+    cp   160                  ; screen width
+    jr   nz,.noWrap
+    ; Wrap reached → reset X and play a note
+    xor  a
+    call PlayNote
+.noWrap:
+    ld   [SpriteX],a
+    ld   [$FE01],a            ; write new X into OAM
+
+    ld   a,1<<0
+    ld   [rIF],a
+    reti
+
+;  Helper routines
+
+CopyMemory:
+    ld   a,[hl+]
+    ld   [de],a
+    inc  de
+    dec  bc
+    ld   a,b
+    or   c
+    jr   nz,CopyMemory
+    ret
+
+WaitVBlank:
+.wait
+    ld   a,[rLY]
+    cp   144
+    jr   c,.wait
+    ret
+
+PlayNote:
+    ; Duty 50 % (bits 6‑7 = 01), length = 64 (≈0.5 s)
+    ld   a,%01000000
+    ld   [NR11],a
+    ; Envelope: start volume 15, decrease 1 per 4 ms
+    ld   a,%11110001
+    ld   [NR12],a
+    ; Frequency = 440 Hz → N = 703 (0x2BF)
+    ld   a,$BF
+    ld   [NR13],a
+    ld   a,$02
+    or   %10000000            ; set trigger flag
+    ld   [NR14],a
+    ret
+
+;  Data
 
 Message:
-    db 8,5,12,12,15,0,2,7,0
-    ; H E L L O _ B G B
-    ; Tile 0 = blank
-
-; ---------------------------------------------------------------------
-; Font
-; Tiles:
-; 0 = blank
-; 2 = B
-; 5 = E
-; 7 = G
-; 8 = H
-; 12 = L
-; 15 = O
-; ---------------------------------------------------------------------
+    db 8,5,12,12,15,0,2,7,0   ; H E L L O _ B G B
 
 Font:
-
 ; Tile 0 (blank)
 REPT 16
     db 0
@@ -131,7 +168,7 @@ db %11111110,%11111110
 db 0,0
 db 0,0
 
-; Tile 6
+; Tile 6 (unused)
 REPT 16
     db 0
 ENDR
@@ -156,7 +193,7 @@ db %11000110,%11000110
 db 0,0
 db 0,0
 
-; Tiles 9-11
+; Tiles 9‑11 (blank)
 REPT 16*3
     db 0
 ENDR
@@ -171,7 +208,7 @@ db %11111110,%11111110
 db 0,0
 db 0,0
 
-; Tiles 13-14
+; Tiles 13‑14 (blank)
 REPT 16*2
     db 0
 ENDR
@@ -187,3 +224,30 @@ db 0,0
 db 0,0
 
 FontEnd:
+
+SpriteTileData:
+    db %11111111   ; row 0
+    db %10000001   ; row 1
+    db %10111101   ; row 2
+    db %10100101   ; row 3
+    db %10100101   ; row 4
+    db %10111101   ; row 5
+    db %10000001   ; row 6
+    db %11111111   ; row 7
+SpriteTileDataEnd:
+
+;  Work RAM (WRAM0) – runtime variables
+SECTION "WRAM", WRAM0
+SpriteX: ds 1        ; current X position (0‑159)
+
+;  Interrupt vector table (must start at $0000)
+SECTION "Interrupts", ROM0[$0000]
+    jp   $0000      ; Reset (handled by header)
+    jp   $0000
+    jp   $0000
+    jp   $0000
+    jp   $0000
+    jp   $0000
+    jp   $0000
+    jp   VBlankISR ; V‑Blank interrupt (vector 0x40)
+    ; remaining vectors can stay $0000
