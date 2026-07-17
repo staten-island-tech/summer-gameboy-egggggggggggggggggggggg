@@ -1,3 +1,5 @@
+include "hardware.rgbinc"
+
 DEF rLCDC  EQU $FF40
 DEF rLY    EQU $FF44
 DEF rBGP   EQU $FF47
